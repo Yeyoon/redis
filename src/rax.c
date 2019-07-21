@@ -353,17 +353,18 @@ raxNode *raxAddChild(raxNode *n, unsigned char c, raxNode **childptr, raxNode **
         *   one ptr. 
         */
 
-        /* Memove a place for the extra ptr*/
+        /* Memove a place for the extra ptr 1 + extra padding size + edge point size*/
         src = (unsigned char*)raxNodeFirstChildPtr(n) + pos * sizeof(raxNode*);
+        dst = src + sizeof(raxNode*) + raxPadding(n->size+1) + 1;
         size_t movlen = (unsigned char*)n + curlen - src;
-        memmove(src + sizeof(raxNode*) + raxPadding(n->size+1),src,movlen);
+        memmove(dst,src,movlen);
 
-        raxNode **newNodePtr = (raxNode**)(src + raxPadding(n->size+1));
+        raxNode **newNodePtr = (raxNode**)(src + raxPadding(n->size+1) + 1);
         *newNodePtr = child;
 
         /* Memove ptr before pos a padding length*/
         src = (unsigned char*)raxNodeFirstChildPtr(n);
-        memmove(src + raxPadding(n->size+1),src,sizeof(raxNode*) * pos);
+        memmove(src + raxPadding(n->size+1)+1,src,sizeof(raxNode*) * pos);
 
         /* Memove a place for the new node Edge */
         src = n->data + c;
