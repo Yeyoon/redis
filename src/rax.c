@@ -162,8 +162,8 @@ static inline void raxStackFree(raxStack *ts) {
     (sizeof(raxNode) + \
     childNumber + \
     raxPadding(childNumber) +\
-    isCompress?sizeof(raxNode*):(sizeof(raxNode*) * childNumber) +\
-    (hasDataField)?(sizeof(void*)):0\
+    (isCompress?sizeof(raxNode*):(sizeof(raxNode*) * childNumber)) +\
+    ((hasDataField)?(sizeof(void*)):0)\
     )
 
 /* Return the pointer to the last child pointer in a node. For the compressed
@@ -202,9 +202,10 @@ static inline void raxStackFree(raxStack *ts) {
  * associated data pointer.
  * Returns the new node pointer. On out of memory NULL is returned. */
 raxNode *raxNewNode(size_t children, int datafield) {
-   /* size_t nodesize = sizeof(raxNode)+children+raxPadding(children)+
+    /* size_t nodesize = sizeof(raxNode)+children+raxPadding(children)+
                       sizeof(raxNode*)*children; */
     size_t nodesize = raxNodeSize(children,datafield,0);
+
     raxNode *node = rax_malloc(nodesize);
     if (node == NULL) return NULL;
     node->iskey = 0;
@@ -270,6 +271,7 @@ void *raxGetData(raxNode *n) {
  * On out of memory NULL is returned, and the old node is still valid. */
 raxNode *raxAddChild(raxNode *n, unsigned char c, raxNode **childptr, raxNode ***parentlink) {
     assert(n->iscompr == 0);
+    raxSetDebugMsg(1);
     debugf("raxAddChild start add char %c\n",c);
     debugnode("raxAddChild",n);
  
@@ -324,60 +326,57 @@ raxNode *raxAddChild(raxNode *n, unsigned char c, raxNode **childptr, raxNode **
         if (n->data[pos] > c) break;
     }
 
-    /* Rewrite it. If the original edges have padding, it means we do 
-     *  not need to do many memmove. 
-     */
-     size_t old_padding = raxPadding(n->size);
-     unsigned char *src, *dst;
-     if (old_padding) {
-        src = n->data + pos;
-        dst = n->data + pos + 1;
+    /* 1. move the ptrs after the insert pos to the right place.
+    *   In this example. [HDR*][abde][Aptr][Bptr][....][....][Dptr][Eptr][AUXP]
+    */
 
-        memmove(dst,src,n->size - pos);
-        n->data[pos] = c;
+    unsigned char *src, *dst;
+    src = (unsigned char*)raxNodeFirstChildPtr(n);
+    src += pos * sizeof(raxNode*);
+    dst = src + newlen - curlen;
+    size_t moveSize = (unsigned char*)n + curlen - src;
+    memmove(dst,src,moveSize);
 
-        /* move ptrs*/
-        src = (unsigned char*)raxNodeFirstChildPtr(n) + pos * sizeof(raxNode*);
-        size_t movlen = (unsigned char*)n + curlen - src;
-        memmove(src + sizeof(raxNode*),src,movlen);
+    /* 2. move the ptrs before insert pos to the right place.
+    *   In this examle. [HDR*][abde][....][Aptr][Bptr][....][Dptr][Eptr][AUXP]
+    */
 
-        raxNode ** newNodePtr = (raxNode**)src;
-        *newNodePtr = child;
-        n->size++;
-        *childptr = child;
-        *parentlink = newNodePtr;
+    src = (unsigned char*)raxNodeFirstChildPtr(n);
+    dst = src + sizeof(raxNode*);
+    moveSize = pos * sizeof(raxNode*);
 
-     }else {
-        /* If old has not padding, it means new must add a padding 
-        *   len = sizeof(void*) - 1. and we need move the ptrs forwar 
-        *   one ptr. 
-        */
+    size_t shift_size = newlen - curlen - sizeof(raxNode*);
+    /* shift_size maybe 0, if original has padding. 
+    *   If original has padding. the ptrs before pos need not move.
+    */
+    if (shift_size){
+        memmove(dst,src,moveSize);
+    }
 
-        /* Memove a place for the extra ptr*/
-        src = (unsigned char*)raxNodeFirstChildPtr(n) + pos * sizeof(raxNode*);
-        size_t movlen = (unsigned char*)n + curlen - src;
-        memmove(src + sizeof(raxNode*) + raxPadding(n->size+1),src,movlen);
+    /* 3. move the edges after the pos to the right place.
+    *   In this example. [HDR*][ab.d][e...][Aptr][Bptr][....][Dptr][Eptr][AUXP]
+    */
+    src = n->data + pos;
+    dst = src + 1;
+    moveSize = n->size - pos;
 
-        raxNode **newNodePtr = (raxNode**)(src + raxPadding(n->size+1));
-        *newNodePtr = child;
+    if (moveSize){
+        memmove(dst,src,moveSize);
+    }
+    /* In the end write the edge and the ptr */
+    n->data[pos] = c;
+    n->size++;
 
-        /* Memove ptr before pos a padding length*/
-        src = (unsigned char*)raxNodeFirstChildPtr(n);
-        memmove(src + raxPadding(n->size+1),src,sizeof(raxNode*) * pos);
+    src = (unsigned char*)raxNodeFirstChildPtr(n);
+    raxNode ** childfield = (raxNode**)(src + sizeof(raxNode*) * pos);
 
-        /* Memove a place for the new node Edge */
-        src = n->data + c;
-        dst = src + 1;
-        memmove(dst,src,c);
-        n->data[pos] = c;
-        n->size++;
-
-        *childptr = child;
-        *parentlink = newNodePtr;
-
-     }
+    memcpy(childfield,&child,sizeof(child));
+    *childptr = child;
+    *parentlink = childfield;
+    
     debugf("raxAddChild end add char %c\n",c);
     debugnode("raxAddChild",n);
+    //raxSetDebugMsg(0);
      return n;
 }
 
